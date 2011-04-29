@@ -47,6 +47,14 @@ Y.mix(DTBase, {
 //
 /////////////////////////////////////////////////////////////////////////////
     ATTRS: {
+
+        /**
+        * @property lowestLevelHeaders
+        * @description Array with lowest level col headers for parsing recordset from markup
+        * @type String
+        */
+        lowestLevelHeaders: null,
+
         /**
         * @attribute columnset
         * @description Pointer to Columnset instance.
@@ -132,9 +140,147 @@ Y.mix(DTBase, {
 /////////////////////////////////////////////////////////////////////////////
     HTML_PARSER: {
         /*caption: function (srcNode) {
-            
+
         }*/
-    }
+        columnset: function(srcNode) {
+          var //tmpSrcNode = Y.one("#inmarkup-2"),
+              dt = this,
+              trs,
+              columnset = [],
+              queu = [],
+              j = 0,
+              lowestLevelHeaders = [],
+              numHeaderRows = 0;
+
+          trs = srcNode.all("thead tr");
+
+          if(trs) {
+            // move horizontally across each th in a thead row
+            trs.each(function(tr){
+
+              var ths = tr.all("th"),
+                  i = 0,
+                  column;
+
+              console.log("new row:", j);
+
+              ths.each( function(th) {
+
+                var numChildren = th.get("colSpan") || 1,// we use colspan to determine how may th children a header has
+                    descendents,
+                    title = th.get("title"),
+                    config = th.getAttribute('yuiConfig'),
+                    key = Y.guid(),
+                    childTh,
+                    parentTh;
+
+                console.log("  new th:", i, " ", title);
+
+                childTh = {label: title, numChildren: numChildren, children:[], key: key};
+
+                if (config) {
+                  config = Y.JSON.parse(config);
+                  childTh = Y.mix(config, childTh);
+                }
+
+                // for each th row, keep referencing and storing th data under the last parent th that doesn't have all its
+                // children accounted for. once this happens, throw this parent out, and use the next one, repeat the process.
+                if(!columnset[0]) {
+                  console.log("    first push to queu:", childTh.label);
+                  columnset.push(childTh);
+                  queu.push(childTh);
+                } else {
+                  parentTh = queu.shift();
+                  if (parentTh) {
+                    console.log("    poped out:", parentTh.label);
+                    console.log("   ", parentTh.label, "'s MIA:", parentTh.numChildren);
+                    if(parentTh.numChildren) {
+                      console.log("   ", parentTh.label, " still has ", parentTh.numChildren, " missing children");
+                      parentTh.numChildren = parentTh.numChildren - numChildren;
+                      console.log("    reducing ", parentTh.label,"'s children by ", title  ,"\'s colspan: ", numChildren, " to: ", parentTh.numChildren);
+                    }
+
+                    childTh.numChildren = numChildren;
+
+                    console.log('    numChildren:', numChildren);
+                    if(numChildren === 1) {
+                      lowestLevelHeaders.push(childTh.label);
+                    }
+
+                    console.log("   ", parentTh.label, ".children.push(", title, ")");
+
+                    parentTh.children.push(childTh);
+
+                    if(parentTh.numChildren === 0) {
+                      console.log("   ", parentTh.label, " **has no more children.**, cleaning up object");
+                      delete parentTh.numChildren; // cleaning up object
+                      console.log("    NOT pushing ", parentTh.label, " BACK to queu");
+                    } else {
+                      console.log("   ", parentTh.label, " still has children.");
+                      console.log("    pushing it BACK to BEG of queu");
+                      queu.splice(0, 0, parentTh);
+                    }
+
+                    if (numChildren > 1) {
+                      console.log("    pushing ", parentTh.label,"'s child parentTh.children[", i,"].label", parentTh.children[i].label," to queu");
+                      queu.push(parentTh.children[i]);
+                    } else {
+                      delete childTh.children; 
+                      delete childTh.numChildren; // cleaning up object
+                    }
+                  }
+                }
+
+                i++;
+              }); // end foreach TH
+
+              j++;
+            }); // end foreach TR
+
+            console.log("queu:", queu);
+            // save this to be used in HTML_PARSER.recordset (which runs after this method)
+            dt.set('lowestLevelHeaders', lowestLevelHeaders);
+
+            console.log('srcNode:', pr(srcNode));
+
+            /* Output of this looks correct */
+            console.log( Y.JSON.stringify(columnset) );
+
+            return columnset;
+          }// end if TRs
+
+        },// end columnset
+
+        recordset: function(srcNode) {
+          var dt = this,
+              lowestLevelHeaders = dt.get('lowestLevelHeaders'),
+              trs = srcNode.all('table tbody tr'),
+              data = [];
+
+          // move horizontally across each tds in a row
+          trs.each(function(tr) {
+            var row = {},
+                i = 0;
+            // console.log( 'tr: ', pr(tr) );
+            var tdLiners = tr.all('td div') || tr.all('td');
+            tdLiners.each(function(tdLiners) {
+              // console.log('  td div: ', pr(tdLiners) );
+              // console.log('  i: ', i);
+              // store each td's innerHTML in a hash marked by the th associated with it
+              row[lowestLevelHeaders[i]] = tdLiners.get('innerHTML');
+              i++;
+            });
+            data.push(row);
+          });// end trs.each
+          console.log('data:', data);
+
+          // TO REVISIT -- when clicking on a sortable column header:
+          //    datatable-sort.js:299 -- Uncaught TypeError: Cannot call method 'get' of undefined
+                // tried clearing DOM at this point, but something else fails silently: srcNode.set('innerHTML', '');
+
+          return data;
+       }
+    }// end HTML_PARSER
 });
 
 /////////////////////////////////////////////////////////////////////////////
@@ -143,6 +289,7 @@ Y.mix(DTBase, {
 //
 /////////////////////////////////////////////////////////////////////////////
 Y.extend(DTBase, Y.Widget, {
+
     /**
     * @property thTemplate
     * @description Tokenized markup template for TH node creation.
@@ -196,6 +343,7 @@ Y.extend(DTBase, Y.Widget, {
     * @private
     */
     _setColumnset: function(columns) {
+        console.log('Running _setColumnset');
         return YLang.isArray(columns) ? new Y.Columnset({definitions:columns}) : columns;
     },
 
@@ -280,6 +428,7 @@ Y.extend(DTBase, Y.Widget, {
     * @private
     */
     initializer: function(config) {
+        //console.log('Base\'s init fired!', config);
         this.after("columnsetChange", this._afterColumnsetChange);
         this.after("recordsetChange", this._afterRecordsetChange);
         this.after("summaryChange", this._afterSummaryChange);
@@ -374,6 +523,7 @@ Y.extend(DTBase, Y.Widget, {
     */
     _addTheadNode: function(tableNode) {
         if(tableNode) {
+            // insert before the colgroup's next sibling our THEAD (so after colgroup)
             this._theadNode = tableNode.insertBefore(Ycreate(TEMPLATE_THEAD), this._colgroupNode.next());
             return this._theadNode;
         }
@@ -520,8 +670,11 @@ Y.extend(DTBase, Y.Widget, {
         
         thead.get("children").remove(true);
 
+        //console.log('tree:', tree);
+
         // Iterate tree of columns to add THEAD rows
         for(; i<len; ++i) {
+            //console.log('tree[', i,']:', tree[i]);
             this._addTheadTrNode({thead:thead, columns:tree[i]}, (i === 0), (i === len-1));
         }
 
@@ -577,6 +730,16 @@ Y.extend(DTBase, Y.Widget, {
 
         for(; i<len; ++i) {
             column = columns[i];
+            /*console.log( 
+              'columns[', i, ']:', 
+              column, 
+              'value:', 
+              column.get("label"), 
+              'column.colSpan:', 
+              column.colSpan, 
+              'column.rowSpan',
+              column.rowSpan
+            );*/
             this._addTheadThNode({value:column.get("label"), column: column, tr:tr});
         }
 
